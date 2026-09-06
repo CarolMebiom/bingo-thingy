@@ -4,7 +4,7 @@ Bingo Card Generator
 
 Generates unique bingo cards from either:
 - A list of strings (materials/words)
-- A list of integers (numbers) - rendered using digit images
+- A list of integers (numbers) - rendered using digit images or text
 
 Usage:
     python generate_bingo.py --materials "item1,item2,item3,..." --nb_row 5 --nb_line 5 --nb_cards 10
@@ -25,13 +25,13 @@ from PIL import Image, ImageDraw, ImageFont
 # Configuration
 IMAGES_DIR = Path("images")
 OUTPUT_DIR = Path("output")
-CARD_SIZE = (800, 800)  # Width, Height of the output card
-CELL_PADDING = 10  # Padding inside each cell
-GRID_LINE_WIDTH = 4  # Width of grid lines
-BACKGROUND_COLOR = (255, 255, 255)  # White background
-GRID_COLOR = (0, 0, 0)  # Black grid lines
-TEXT_COLOR = (0, 0, 0)  # Black text
-TEXT_COLOR_RED = (255, 0, 0)  # Red text for free space
+CARD_SIZE = (1200, 1200)  # Increased size for better visibility
+CELL_PADDING = 20  # Increased padding
+GRID_LINE_WIDTH = 4
+BACKGROUND_COLOR = (255, 255, 255)  # White
+GRID_COLOR = (0, 0, 0)  # Black
+TEXT_COLOR = (0, 0, 0)  # Black
+FREE_SPACE_COLOR = (255, 0, 0)  # Red
 
 
 def load_digit_images() -> dict:
@@ -49,6 +49,7 @@ def load_digit_images() -> dict:
 def create_number_image(number: int, digit_images: dict, max_width: int, max_height: int) -> Image.Image:
     """
     Create an image of a number by combining individual digit images.
+    All digits are scaled to the same height for consistent sizing.
     
     Args:
         number: The number to render
@@ -61,85 +62,113 @@ def create_number_image(number: int, digit_images: dict, max_width: int, max_hei
     """
     digits = list(map(int, str(number)))
     
-    # Get the dimensions of digit images
-    sample_digit = digit_images[0]
+    # Get the dimensions of the first available digit image
+    sample_digit = digit_images[digits[0]] if digits[0] in digit_images else digit_images[0]
     digit_width = sample_digit.width
     digit_height = sample_digit.height
     
-    # Calculate total width needed
-    total_width = len(digits) * digit_width
+    # Calculate scale to fit max_height
+    scale = max_height / digit_height
+    new_digit_width = int(digit_width * scale)
+    new_digit_height = int(digit_height * scale)
     
-    # Scale if needed
-    scale = min(max_width / total_width, max_height / digit_height)
-    if scale < 1:
+    # Calculate total width needed
+    total_width = len(digits) * new_digit_width
+    
+    # If total width exceeds max_width, reduce scale
+    if total_width > max_width:
+        scale = max_width / (len(digits) * digit_width)
         new_digit_width = int(digit_width * scale)
         new_digit_height = int(digit_height * scale)
-    else:
-        new_digit_width = digit_width
-        new_digit_height = digit_height
     
     # Create a new image with transparent background
-    result = Image.new("RGBA", (len(digits) * new_digit_width, new_digit_height), (255, 255, 255, 0))
+    result = Image.new("RGBA", (len(digits) * new_digit_width, new_digit_height), (0, 0, 0, 0))
     
     # Paste each digit
     for i, digit in enumerate(digits):
         img = digit_images[digit]
-        if scale < 1:
-            img = img.resize((new_digit_width, new_digit_height), Image.Resampling.LANCZOS)
-        result.paste(img, (i * new_digit_width, 0), img if img.mode == "RGBA" else None)
+        resized_img = img.resize((new_digit_width, new_digit_height), Image.Resampling.LANCZOS)
+        result.paste(resized_img, (i * new_digit_width, 0), resized_img)
     
     return result
 
 
-def create_text_image(text: str, max_width: int, max_height: int, font_size: int = 40) -> Image.Image:
+def get_font(font_size: int) -> ImageFont.FreeTypeFont:
+    """Get a font, trying various options."""
+    # Try various font paths
+    font_paths = [
+        "arial.ttf",
+        "/usr/share/fonts/truetype/arial.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+    ]
+    
+    for path in font_paths:
+        try:
+            return ImageFont.truetype(path, font_size)
+        except:
+            continue
+    
+    # Fall back to default font
+    try:
+        return ImageFont.truetype("DejaVuSans.ttf", font_size)
+    except:
+        return ImageFont.load_default()
+
+
+def create_text_image(text: str, max_width: int, max_height: int) -> Image.Image:
     """
-    Create an image with centered text.
+    Create an image with centered text that fits within the given dimensions.
+    Uses binary search to find the maximum font size that fits.
     
     Args:
         text: Text to render
         max_width: Maximum width
         max_height: Maximum height
-        font_size: Font size to use
     
     Returns:
         PIL Image with the text
     """
-    # Try to load a nice font, fall back to default
-    try:
-        font = ImageFont.truetype("arial.ttf", font_size)
-    except:
-        try:
-            font = ImageFont.truetype("/usr/share/fonts/truetype/arial.ttf", font_size)
-        except:
-            font = ImageFont.load_default()
-    
-    # Create image
-    img = Image.new("RGBA", (max_width, max_height), (255, 255, 255, 0))
+    # Create image with transparent background
+    img = Image.new("RGBA", (max_width, max_height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
     
-    # Get text size and position
-    text_bbox = draw.textbbox((0, 0), text, font=font)
-    text_width = text_bbox[2] - text_bbox[0]
-    text_height = text_bbox[3] - text_bbox[1]
+    # Binary search for the best font size
+    low = 8
+    high = min(max_height, 200)  # Reasonable upper bound
+    best_size = 8
+    best_font = get_font(8)
     
-    # Scale font if text is too large
-    while text_width > max_width or text_height > max_height:
-        font_size -= 2
-        font = ImageFont.truetype("arial.ttf", font_size) if font_size > 10 else ImageFont.load_default()
-        text_bbox = draw.textbbox((0, 0), text, font=font)
-        text_width = text_bbox[2] - text_bbox[0]
-        text_height = text_bbox[3] - text_bbox[1]
-        if font_size <= 8:
-            break
+    while low <= high:
+        mid = (low + high) // 2
+        font = get_font(mid)
+        
+        # Get text bounding box
+        bbox = draw.textbbox((0, 0), text, font=font)
+        text_width = bbox[2] - bbox[0]
+        text_height = bbox[3] - bbox[1]
+        
+        if text_width <= max_width and text_height <= max_height:
+            best_size = mid
+            best_font = font
+            low = mid + 1
+        else:
+            high = mid - 1
     
-    # Calculate position to center text
+    # Draw the text centered
+    bbox = draw.textbbox((0, 0), text, font=best_font)
+    text_width = bbox[2] - bbox[0]
+    text_height = bbox[3] - bbox[1]
+    
     x = (max_width - text_width) // 2
     y = (max_height - text_height) // 2
     
-    # Draw text with black outline for better visibility
-    # White background for text
-    draw.rectangle([x - 5, y - 5, x + text_width + 5, y + text_height + 5], fill=(255, 255, 255, 200))
-    draw.text((x, y), text, font=font, fill=TEXT_COLOR)
+    # Draw with white background for better visibility
+    draw.rectangle([x - 2, y - 2, x + text_width + 2, y + text_height + 2], 
+                   fill=(255, 255, 255, 230))
+    draw.text((x, y), text, font=best_font, fill=TEXT_COLOR)
     
     return img
 
@@ -150,8 +179,7 @@ def generate_bingo_card(
     nb_line: int,
     card_index: int,
     digit_images: dict = None,
-    is_numbers: bool = False,
-    free_space: bool = True
+    is_numbers: bool = False
 ) -> Image.Image:
     """
     Generate a single bingo card.
@@ -163,7 +191,6 @@ def generate_bingo_card(
         card_index: Index of this card (for unique randomization)
         digit_images: Dictionary of digit images (for number mode)
         is_numbers: Whether items are numbers
-        free_space: Whether to include a free space in the center
     
     Returns:
         PIL Image of the bingo card
@@ -173,7 +200,7 @@ def generate_bingo_card(
     
     # Select random items for this card
     # Use card_index to ensure different random selections for each card
-    random.seed(card_index)
+    random.seed(card_index + 1000)  # Offset for better distribution
     selected_items = random.sample(items, min(len(items), total_cells))
     
     # If we have fewer items than cells, repeat some
@@ -194,11 +221,15 @@ def generate_bingo_card(
     cell_height = (card_height - GRID_LINE_WIDTH) // nb_row
     
     # Draw grid lines
-    for i in range(nb_line + 1):
+    draw.line([(0, 0), (card_width, 0)], fill=GRID_COLOR, width=GRID_LINE_WIDTH)
+    draw.line([(0, card_height - GRID_LINE_WIDTH), (card_width, card_height - GRID_LINE_WIDTH)], 
+              fill=GRID_COLOR, width=GRID_LINE_WIDTH)
+    
+    for i in range(1, nb_line):
         x = i * cell_width + (i * GRID_LINE_WIDTH)
         draw.line([(x, 0), (x, card_height)], fill=GRID_COLOR, width=GRID_LINE_WIDTH)
     
-    for i in range(nb_row + 1):
+    for i in range(1, nb_row):
         y = i * cell_height + (i * GRID_LINE_WIDTH)
         draw.line([(0, y), (card_width, y)], fill=GRID_COLOR, width=GRID_LINE_WIDTH)
     
@@ -212,19 +243,16 @@ def generate_bingo_card(
             y_start = row * (cell_height + GRID_LINE_WIDTH)
             
             # Check for free space (center cell for odd-sized cards)
-            if free_space and nb_row % 2 == 1 and nb_line % 2 == 1:
+            if nb_row % 2 == 1 and nb_line % 2 == 1:
                 center_row = nb_row // 2
                 center_col = nb_line // 2
                 if row == center_row and col == center_col:
                     # Draw free space
                     center_x = x_start + cell_width // 2
                     center_y = y_start + cell_height // 2
-                    try:
-                        font = ImageFont.truetype("arial.ttf", 40)
-                    except:
-                        font = ImageFont.load_default()
-                    draw.text((center_x - 20, center_y - 20), "FREE", font=font, fill=TEXT_COLOR_RED)
-                    draw.text((center_x - 30, center_y + 10), "SPACE", font=font, fill=TEXT_COLOR_RED)
+                    font = get_font(48)
+                    draw.text((center_x - 30, center_y - 25), "FREE", font=font, fill=FREE_SPACE_COLOR)
+                    draw.text((center_x - 40, center_y + 15), "SPACE", font=font, fill=FREE_SPACE_COLOR)
                     continue
             
             # Get item for this cell
@@ -234,14 +262,17 @@ def generate_bingo_card(
                 item = selected_items[cell_index % len(selected_items)]
             
             # Create item image
+            available_width = cell_width - CELL_PADDING * 2
+            available_height = cell_height - CELL_PADDING * 2
+            
             if is_numbers and digit_images:
-                item_img = create_number_image(item, digit_images, cell_width - CELL_PADDING * 2, cell_height - CELL_PADDING * 2)
+                item_img = create_number_image(item, digit_images, available_width, available_height)
             else:
-                item_img = create_text_image(str(item), cell_width - CELL_PADDING * 2, cell_height - CELL_PADDING * 2)
+                item_img = create_text_image(str(item), available_width, available_height)
             
             # Center the item image in the cell
-            item_x = x_start + CELL_PADDING + (cell_width - CELL_PADDING * 2 - item_img.width) // 2
-            item_y = y_start + CELL_PADDING + (cell_height - CELL_PADDING * 2 - item_img.height) // 2
+            item_x = x_start + CELL_PADDING + (available_width - item_img.width) // 2
+            item_y = y_start + CELL_PADDING + (available_height - item_img.height) // 2
             
             # Paste the item image
             card_img.paste(item_img, (item_x, item_y), item_img if item_img.mode == "RGBA" else None)
@@ -277,7 +308,11 @@ def generate_bingo_cards(
     # Load digit images if in number mode
     digit_images = None
     if is_numbers:
-        digit_images = load_digit_images()
+        try:
+            digit_images = load_digit_images()
+        except FileNotFoundError as e:
+            print(f"Warning: {e}. Falling back to text rendering for numbers.")
+            is_numbers = False
     
     generated_paths = []
     
@@ -330,10 +365,6 @@ def main():
     # Output directory
     parser.add_argument("--output_dir", type=str, default="output", 
                        help="Output directory for generated cards")
-    
-    # Free space option
-    parser.add_argument("--no_free_space", action="store_true", 
-                       help="Disable free space in center cell")
     
     args = parser.parse_args()
     
