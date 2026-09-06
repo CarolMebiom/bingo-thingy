@@ -168,21 +168,26 @@ def compute_number_target_height(
     max_height: int,
 ) -> int:
     """
-    Find the single glyph height (after the crop above) that, when used to
-    scale every digit, still lets the widest number in `items` fit within
-    max_width. All digits share this one target height, so every number on
-    every card is drawn at the same visual size.
-    """
-    max_glyph_height = max(img.height for img in digit_images.values())
+    Find the single target glyph height that every digit will be normalized
+    to. Each digit is scaled INDEPENDENTLY to reach exactly this height
+    (see scale_digit_images) - source digit PNGs are often drawn at
+    inconsistent raw sizes (a "2" or "7" drawn much bigger than a "1" or "9"
+    in the original artwork), so a shared scale factor based on one digit's
+    size would just preserve that disparity instead of correcting it.
 
+    We search downward from max_height for the largest target height at
+    which every number in `items`, once every one of its digits is
+    normalized to that height, still fits within max_width.
+    """
     target_height = max_height
     while target_height > 1:
-        scale = target_height / max_glyph_height
         fits = True
         for item in items:
-            total_width = sum(
-                digit_images[int(d)].width * scale for d in str(item)
-            )
+            total_width = 0.0
+            for d in str(item):
+                img = digit_images[int(d)]
+                scale = target_height / img.height
+                total_width += img.width * scale
             if total_width > max_width:
                 fits = False
                 break
@@ -194,15 +199,18 @@ def compute_number_target_height(
 
 
 def scale_digit_images(digit_images: Dict[int, Image.Image], target_height: int) -> Dict[int, Image.Image]:
-    """Resize every (already glyph-cropped) digit so they share the same height."""
-    max_glyph_height = max(img.height for img in digit_images.values())
-    scale = target_height / max_glyph_height
-
+    """
+    Resize every (already glyph-cropped) digit to exactly `target_height`,
+    each using its OWN scale factor (target_height / that digit's own
+    cropped height). This is what makes a naturally-small "1" or "9" end up
+    the same height as a naturally-large "2" or "7" in the source art,
+    rather than staying proportionally smaller.
+    """
     scaled = {}
     for digit, img in digit_images.items():
+        scale = target_height / img.height
         new_w = max(1, round(img.width * scale))
-        new_h = max(1, round(img.height * scale))
-        scaled[digit] = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+        scaled[digit] = img.resize((new_w, target_height), Image.Resampling.LANCZOS)
     return scaled
 
 
